@@ -4,6 +4,6 @@ import com.rackspacecloud.blueflood.metricsmetadataservice.model.Metrics;
 
 import java.util.List;
 
-public interface IIngestService {
+public interface IMetricsService {
     void ingest(List<Metrics> metricsList);
 }

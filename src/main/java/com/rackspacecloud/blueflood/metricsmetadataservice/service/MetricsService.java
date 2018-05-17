@@ -15,9 +15,9 @@ import org.springframework.web.client.RestTemplate;
 import java.util.List;
 
 @Service
-public class IngestService implements IIngestService {
+public class MetricsService implements IMetricsService {
     private static final String DOCUMENT_TYPE = "metrics";
-    private static final Logger LOGGER = LoggerFactory.getLogger(IngestService.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(MetricsService.class);
 
     @Autowired
     private RestTemplate restTemplate;

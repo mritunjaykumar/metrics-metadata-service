@@ -1,16 +1,14 @@
 package com.rackspacecloud.blueflood.metricsmetadataservice.service;
 
 import com.rackspacecloud.blueflood.metricsmetadataservice.config.ElasticsearchConfig;
+import com.rackspacecloud.blueflood.metricsmetadataservice.exceptions.MetricsIngestionException;
 import com.rackspacecloud.blueflood.metricsmetadataservice.model.Locator;
 import com.rackspacecloud.blueflood.metricsmetadataservice.model.Metrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 
@@ -20,53 +18,19 @@ public class MetricsService implements IMetricsService {
     private static final Logger LOGGER = LoggerFactory.getLogger(MetricsService.class);
 
     @Autowired
-    private RestTemplate restTemplate;
-
-    @Value("${elasticsearch.api.url}")
-    String ELASTICSEARCH_API_URL;
+    ElasticsearchRestHelper elasticsearchRestHelper;
 
     @Override
-    public void ingest(List<Metrics> metricsList) {
+    public void ingest(List<Metrics> metricsList) throws MetricsIngestionException {
         String bulkString = bulkStringify(metricsList);
         String urlFormat = "%s/_bulk";
-        index(urlFormat, bulkString);
-    }
 
-    /**
-     * Bulk Index in Elasticsearch using rest api.
-     * @param urlFormat
-     * @param bulkString
-     */
-    private void index(String urlFormat, String bulkString){
-        //TODO: For now using only one ES URL
-        String url = String.format(urlFormat, ELASTICSEARCH_API_URL);
-        HttpEntity<String> requestEntity = new HttpEntity<>(bulkString, getHeaders());
-
-        ResponseEntity<String> response = null;
         try {
-            response = restTemplate.exchange(url, HttpMethod.POST, requestEntity, String.class);
-            HttpStatus status = response.getStatusCode();
-            if(status != HttpStatus.OK){
-                LOGGER.error("index method failed with HTTP status: {}", status);
-            }
+            elasticsearchRestHelper.index(urlFormat, bulkString);
         }
         catch(Exception e){
-            if(response == null){
-                LOGGER.error("index method failed with message: {}", e.getMessage());
-//                url = String.format(urlFormat, getNextBaseUrl());
-//                callQ.add(url);
-            }
-            else {
-                LOGGER.error("index method failed with status code: {} and exception message: {}",
-                    response.getStatusCode(), e.getMessage());
-            }
+            throw new MetricsIngestionException(e.getMessage(), e.getCause());
         }
-    }
-
-    private HttpHeaders getHeaders(){
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        return headers;
     }
 
     /**

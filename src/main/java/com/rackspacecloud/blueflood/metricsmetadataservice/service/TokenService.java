@@ -1,105 +1,73 @@
 package com.rackspacecloud.blueflood.metricsmetadataservice.service;
 
 import com.rackspacecloud.blueflood.metricsmetadataservice.config.ElasticsearchConfig;
+import com.rackspacecloud.blueflood.metricsmetadataservice.exceptions.TokensIngestionException;
 import com.rackspacecloud.blueflood.metricsmetadataservice.model.Locator;
 import com.rackspacecloud.blueflood.metricsmetadataservice.model.Metrics;
+import com.rackspacecloud.blueflood.metricsmetadataservice.model.Token;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
-import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+
+import static java.util.stream.Collectors.toList;
+import static java.util.stream.Collectors.toSet;
 
 @Service
 public class TokenService implements ITokenService {
-
-    private static final String DOCUMENT_TYPE = "metrics";
+    private static final String DOCUMENT_TYPE = "tokens";
     private static final Logger LOGGER = LoggerFactory.getLogger(TokenService.class);
 
     @Autowired
-    private RestTemplate restTemplate;
-
-    @Value("${elasticsearch.api.url}")
-    String ELASTICSEARCH_API_URL;
+    ElasticsearchRestHelper elasticsearchRestHelper;
 
     @Override
-    public void ingest(List<Metrics> metricsList){
-        String bulkString = bulkStringify(metricsList);
+    public void ingest(final List<Metrics> metricsList) throws TokensIngestionException {
+        List<Locator> locators = getLocators(metricsList);
+        List<Token> tokens = new ArrayList<>();
+        tokens.addAll(getTokens(locators));
+
+        if(tokens.size() == 0) return;
+
+        String bulkString = bulkStringifyTokens(tokens);
         String urlFormat = "%s/_bulk";
-        index(urlFormat, bulkString);
-    }
-
-    private void index(String urlFormat, String bulkString){
-        //TODO: For now using only one ES URL
-        String url = String.format(urlFormat, ELASTICSEARCH_API_URL);
-        HttpEntity<String> requestEntity = new HttpEntity<>(bulkString, getHeaders());
-
-        ResponseEntity<String> response = null;
         try {
-            response = restTemplate.exchange(url, HttpMethod.POST, requestEntity, String.class);
-            HttpStatus status = response.getStatusCode();
-            if(status != HttpStatus.OK){
-                LOGGER.error("index method failed with HTTP status: {}", status);
-            }
-        }
-        catch(Exception e){
-            if(response == null){
-                LOGGER.error("index method failed with message: {}", e.getMessage());
-//                url = String.format(urlFormat, getNextBaseUrl());
-//                callQ.add(url);
-            }
-            else {
-                LOGGER.error("index method failed with status code: {} and exception message: {}",
-                        response.getStatusCode(), e.getMessage());
-            }
+            elasticsearchRestHelper.index(urlFormat, bulkString);
+        } catch (Exception e) {
+            throw new TokensIngestionException(e.getMessage(), e.getCause());
         }
     }
 
-    private HttpHeaders getHeaders(){
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        return headers;
-    }
-
-    private String bulkStringify(List<Metrics> metrics){
+    private String bulkStringifyTokens(List<Token> tokens){
         StringBuilder sb = new StringBuilder();
-        String actionAndMetaDataFormat =
-                "{ \"index\" : { \"_index\" : \"%s\", \"_type\" : \"%s\", \"_id\" : \"%s\", \"routing\" : \"%s\" } }%n";
 
-        for(Metrics metric : metrics){
-            Locator locator = metric.getLocator();
+        for(Token token : tokens){
+            sb.append(String.format(
+                    "{ \"index\" : { \"_index\" : \"%s\", \"_type\" : \"%s\", \"_id\" : \"%s\", \"routing\" : \"%s\" } }%n",
+                    ElasticsearchConfig.TOKEN_INDEX_NAME_WRITE, DOCUMENT_TYPE,
+                    token.getId(), token.getLocator().getTenantId()));
 
-            if(locator.getMetricName() == null)
-                throw new IllegalArgumentException("trying to insert metric discovery without a metricName");
-
-            String tenantId = locator.getTenantId();
-
-            sb.append(String.format(actionAndMetaDataFormat,
-                    ElasticsearchConfig.INDEX_NAME_WRITE,
-                    DOCUMENT_TYPE,
-                    tenantId + ":" + locator.getMetricName(),
-                    tenantId));
-
-            if(StringUtils.isEmpty(metric.getUnit())){
-                sb.append(String.format(
-                        "{ \"%s\" : \"%s\", \"%s\" : \"%s\", \"%s\" : \"%s\" }%n",
-                        MetricsMetadataFieldLabel.TENANT_ID.toString(), locator.getTenantId(),
-                        MetricsMetadataFieldLabel.METRIC_NAME.toString(), locator.getMetricName(),
-                        MetricsMetadataFieldLabel.UNIT.toString(), metric.getUnit()));
-            }
-            else {
-                sb.append(String.format(
-                        "{ \"%s\" : \"%s\", \"%s\" : \"%s\" }%n",
-                        MetricsMetadataFieldLabel.TENANT_ID.toString(), locator.getTenantId(),
-                        MetricsMetadataFieldLabel.METRIC_NAME.toString(), locator.getMetricName()));
-            }
+            sb.append(String.format("{ \"%s\" : \"%s\", \"%s\" : \"%s\", \"%s\" : \"%s\", \"%s\" : \"%s\" }%n",
+                    TokenMetadataFieldLabel.TOKEN.toString(), token.getToken(),
+                    TokenMetadataFieldLabel.PARENT.toString(), token.getParent(),
+                    TokenMetadataFieldLabel.IS_LEAF.toString(), token.isLeaf(),
+                    TokenMetadataFieldLabel.TENANT_ID.toString(), token.getLocator().getTenantId()));
         }
 
         return sb.toString();
     }
 
+    private List<Locator> getLocators(final List<Metrics> input) {
+        return input.stream()
+                .map(Metrics::getLocator)
+                .collect(toList());
+    }
+
+    private Set<Token> getTokens(final List<Locator> locators) {
+        return Token.getUniqueTokens(locators.stream()).collect(toSet());
+    }
 }

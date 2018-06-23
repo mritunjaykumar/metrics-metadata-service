@@ -4,6 +4,8 @@ package com.rackspacecloud.blueflood.metricsmetadataservice.controller;
 import com.rackspacecloud.blueflood.metricsmetadataservice.exceptions.TokensIngestionException;
 import com.rackspacecloud.blueflood.metricsmetadataservice.model.Metrics;
 import com.rackspacecloud.blueflood.metricsmetadataservice.service.ITokenService;
+import io.micrometer.core.annotation.Timed;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,12 @@ import java.util.List;
 @Component
 public class TokenController {
     private static final Logger LOGGER = LoggerFactory.getLogger(TokenController.class);
+    MeterRegistry registry;
+
+    @Autowired
+    public TokenController(MeterRegistry registry){
+        this.registry = registry;
+    }
 
     @Autowired
     private ITokenService tokenService;
@@ -32,11 +40,12 @@ public class TokenController {
             method = RequestMethod.POST,
             consumes = MediaType.APPLICATION_JSON_VALUE
     )
+    @Timed(value = "elasticsearch.token.ingest")
     public ResponseEntity<String> ingest(@RequestBody List<Metrics> metricsCollection) throws TokensIngestionException {
         LOGGER.debug("Started ingest of the payload.");
         tokenService.ingest(metricsCollection);
         LOGGER.debug("Completed ingest of the payload.");
 
-        return new ResponseEntity<String>("", HttpStatus.OK);
+        return new ResponseEntity<>("", HttpStatus.OK);
     }
 }

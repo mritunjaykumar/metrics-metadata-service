@@ -3,6 +3,8 @@ package com.rackspacecloud.blueflood.metricsmetadataservice.controller;
 import com.rackspacecloud.blueflood.metricsmetadataservice.exceptions.MetricsIngestionException;
 import com.rackspacecloud.blueflood.metricsmetadataservice.model.Metrics;
 import com.rackspacecloud.blueflood.metricsmetadataservice.service.IMetricsService;
+import io.micrometer.core.annotation.Timed;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,12 @@ import java.util.List;
 @Component
 public class MetricsController {
     private static final Logger LOGGER = LoggerFactory.getLogger(MetricsController.class);
+    MeterRegistry registry;
+
+    @Autowired
+    public MetricsController(MeterRegistry registry){
+        this.registry = registry;
+    }
 
     @Autowired
     private IMetricsService metricsService;
@@ -32,6 +40,7 @@ public class MetricsController {
             method = RequestMethod.POST,
             consumes = MediaType.APPLICATION_JSON_VALUE
     )
+    @Timed(value = "elasticsearch.metrics.ingest")
     public ResponseEntity<String> ingest(@RequestBody List<Metrics> metricsCollection) throws MetricsIngestionException {
         LOGGER.debug("Started ingest of the payload.");
         metricsService.ingest(metricsCollection);

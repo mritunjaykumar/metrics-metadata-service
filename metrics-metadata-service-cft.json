@@ -1,0 +1,216 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description" : "Create service EC2 Instance with ELB",
+  "Parameters" : {
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+      "Type" : "String",
+      "Default" : "mrit1806",
+      "AllowedValues" : [ "mrit1806" ]
+    },
+    "TargetVPC" : {
+      "Description" : "The target VPC in which to create/update stack",
+      "Type" : "String",
+      "Default" : "stage",
+      "AllowedValues" : [ "stage" ],
+      "ConstraintDescription" : "Valid VPC"
+    },
+    "InstanceOS" : {
+      "Description" : "EC2 OS",
+      "Type" : "String",
+      "Default" : "Ubuntu",
+      "AllowedValues" : [ "Ubuntu" ]
+    },
+
+    "DataInstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.medium",
+      "AllowedValues" : [ "t2.micro", "t2.medium", "t2.large", "m4.large", "m4.xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+
+    "IamInstanceProfile": {
+      "Type" : "String",
+      "Default": "arn:aws:iam::749833639264:instance-profile/mmi-metrics-ec2instance-role"
+    },
+
+    "DataInstanceQuantity" : {
+      "Type": "Number",
+      "Default": 1,
+      "Description": "The number of nodes to launch"
+    }
+  },
+
+  "Mappings" : {
+    "RegionMap" : {
+      "us-east-2" : {
+        "Ubuntu" : "ami-32b68857"
+      }
+    },
+    "EnvironmentConfigs" : {
+      "all" : {
+        "AZ1" : "us-east-2a",
+        "AZ2" : "us-east-2b",
+        "Owner" : "mritunjay.kumar@rackspace.com",
+        "CostCenter" : "",
+        "Department" : "segsup",
+        "Team" : "mmi-metrics"
+      },
+
+      "stage" : {
+        "vpcid" : "vpc-f2cbab9b",
+        "subnetAZ1" : "subnet-7c94e215",
+        "subnetAZ2" : "subnet-f0e55a8b",
+        "autostart" : "",
+        "autostop" : ""
+      }
+    }
+  },
+  "Resources" : {
+    "MetricsLC" : {
+      "Description" : "EC2 launch configuration",
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Properties" : {
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, { "Ref" : "InstanceOS" } ]},
+        "SecurityGroups": [ { "Ref" : "SecurityGroupEC2Instance" } ],
+        "InstanceType" : { "Ref" : "DataInstanceType" },
+        "IamInstanceProfile": { "Ref": "IamInstanceProfile"},
+
+        "UserData": { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -xe\n",
+          "/usr/bin/aws s3 cp s3://mmi-metrics/metrics-metadata-service-0.0.1-SNAPSHOT.jar /home/ec2-user/metrics-metadata-service.jar\n",
+          "java -Djava.security.egd=file:/dev/./urandom -jar /home/ec2-user/metrics-metadata-service.jar --elasticsearch.api.url=http://13.59.35.2:9200/"
+        ]]}}
+      }
+    },
+    "MetricsELB" : {
+      "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties" : {
+        "Subnets" : [
+          { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref": "TargetVPC" }, "subnetAZ1" ] },
+          { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref": "TargetVPC" }, "subnetAZ2" ] }
+        ],
+        "CrossZone" : "true",
+        "Listeners" : [
+          {"LoadBalancerPort" : "80", "InstancePort" : "8080", "Protocol": "HTTP"}
+        ],
+        "SecurityGroups" : [ { "Ref" : "MetricsSecurityGroupELB" } ],
+        "Scheme" : "internet-facing",
+        "HealthCheck" : {
+          "Interval" : "5",
+          "Timeout" : "2",
+          "HealthyThreshold" : "3",
+          "UnhealthyThreshold" : "5",
+          "Target" : "HTTP:8080/actuator/health"
+        },
+        "ConnectionDrainingPolicy": {
+          "Enabled": "True",
+          "Timeout": 30
+        }
+      }
+    },
+    "MetricsASG" : {
+      "Description" : "Auto-scaling group",
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : [
+          { "Fn::FindInMap" : [ "EnvironmentConfigs", "all", "AZ1" ] },
+          { "Fn::FindInMap" : [ "EnvironmentConfigs", "all", "AZ2" ] }
+        ],
+        "LaunchConfigurationName" : { "Ref" : "MetricsLC" },
+        "LoadBalancerNames" : [ { "Ref" : "MetricsELB" } ],
+        "VPCZoneIdentifier" : [
+          { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref" : "TargetVPC" }, "subnetAZ1" ] },
+          { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref" : "TargetVPC" }, "subnetAZ2" ] }
+        ],
+        "MinSize" : { "Ref" : "DataInstanceQuantity" },
+        "MaxSize" : { "Ref" : "DataInstanceQuantity" },
+        "DesiredCapacity" : { "Ref" : "DataInstanceQuantity" },
+        "Tags" : [
+          {
+            "Key" : "Name",
+            "Value" : { "Fn::Join" : [ "-", [
+              { "Fn::FindInMap" : [ "EnvironmentConfigs", "all", "Department" ] },
+              { "Fn::FindInMap" : [ "EnvironmentConfigs", "all", "Team" ] }
+            ] ] },
+            "PropagateAtLaunch" : "true"
+          },
+          {
+            "Key" :  "role",
+            "Value" : "metrics-service",
+            "PropagateAtLaunch" :  "true"
+          },
+          {
+            "Key" :  "Owner",
+            "Value" : { "Fn::FindInMap" : [ "EnvironmentConfigs", "all", "Owner" ] },
+            "PropagateAtLaunch" :  "true"
+          },
+          {
+            "Key" : "CostCenter",
+            "Value" : { "Fn::FindInMap" : [ "EnvironmentConfigs", "all", "CostCenter" ] },
+            "PropagateAtLaunch" : "true"
+          },
+          {
+            "Key" : "auto_start",
+            "Value" : { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref" : "TargetVPC" }, "autostart" ] },
+            "PropagateAtLaunch" : "true"
+          },
+          {
+            "Key" : "auto_stop",
+            "Value" : { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref" : "TargetVPC" }, "autostop" ] },
+            "PropagateAtLaunch" : "true"
+          }
+        ]
+      }
+    },
+    "MetricsSecurityGroupELB" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable to ELB from work networks",
+        "VpcId": { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref" : "TargetVPC" }, "vpcid" ] },
+        "Tags" : [ {
+          "Key" : "Name",
+          "Value" : "MetricsSecurityGroupELB"
+        },{
+          "Key" : "Owner",
+          "Value" : "mritunjay.kumar@rackspace.com"
+        }],
+        "SecurityGroupIngress" : [
+          {"IpProtocol" : "tcp", "FromPort" : "8080", "ToPort" : "8080", "CidrIp" : "24.16.102.122/32"},
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "24.16.102.122/32"},
+          {"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : "24.16.102.122/32"}
+        ]
+      }
+    },
+    "SecurityGroupEC2Instance" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable to EC2 instance from work machine and ELB",
+        "VpcId": { "Fn::FindInMap" : [ "EnvironmentConfigs", { "Ref" : "TargetVPC" }, "vpcid" ] },
+        "Tags" : [ {
+          "Key" : "Name",
+          "Value" : "SecurityGroupEC2Instance"
+        },{
+          "Key" : "Owner",
+          "Value" : "mritunjay.kumar@rackspace.com"
+        }],
+        "SecurityGroupIngress" : [
+          {"IpProtocol" : "tcp", "FromPort" : "8080", "ToPort" : "8080", "CidrIp" : "172.31.0.0/16"},
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "172.31.0.0/16"},
+          {"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : "172.31.0.0/16"},
+          {"IpProtocol" : "tcp", "FromPort" : "8080", "ToPort" : "8080", "CidrIp" : "24.16.102.122/32"},
+          {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "24.16.102.122/32"},
+          {"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : "24.16.102.122/32"}
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ELBUrl": {
+      "Description": "The URL of the service.",
+      "Value": { "Ref" : "MetricsELB" }
+    }
+  }
+}
